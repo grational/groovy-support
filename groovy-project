@@ -107,11 +107,11 @@ package_statement="package ${rnd_base_package//\//.}.${project_name}"
 sed -i "1i${package_statement}" "${default_class}" "${default_test}"
 # unit test 5
 if ! grep -q "${package_statement}" "${default_class}"; then
-  echo "Adding rnd_package statement to default class failed: exiting..."
+  slog "Adding rnd_package statement to default class failed: exiting..."
   exit 1
 fi
 if ! grep -q "${package_statement}" "${default_test}"; then
-  echo "Adding rnd_package statement to default test failed: exiting..."
+  slog "Adding rnd_package statement to default test failed: exiting..."
   exit 1
 fi
 
@@ -121,12 +121,12 @@ mv "${default_test}" "${test_dir}/${rnd_base_package}/${project_name}"
 # unit test 6
 if [[ ! -f "${main_dir}/${rnd_base_package}/${project_name}/${init_class}" ]]
 then
-  echo "${init_class} not moved to rnd_base_package correctly: exiting..."
+  slog "${init_class} not moved to rnd_base_package correctly: exiting..."
   exit 1
 fi
 if [[ ! -f "${test_dir}/${rnd_base_package}/${project_name}/${init_test}" ]]
 then
-  echo "${init_test} not moved to rnd_base_package correctly: exiting..."
+  slog "${init_test} not moved to rnd_base_package correctly: exiting..."
   exit 1
 fi
 
@@ -136,7 +136,7 @@ gradle_conf='build.gradle'
 sed -i "12i${eclipse_plugin_statement}" "${gradle_conf}"
 # Unit Test 7
 if ! gradle tasks | grep -q 'eclipse'; then
-  echo "Apply eclipse plugin to gradle conf file failed: exiting..."
+  slog "Apply eclipse plugin to gradle conf file failed: exiting..."
   exit 1
 fi
 
@@ -145,7 +145,7 @@ gradle eclipse &>/dev/null
 # unit test 8
 for ep_file in classpath project settings; do
   if [[ ! -e ".${ep_file}" ]]; then
-    echo "Generating eclipse project files failed: exiting..."
+    slog "Generating eclipse project files failed: exiting..."
     exit 1
   fi
 done
@@ -155,6 +155,6 @@ eclipse_classpath="${project_dir}/.classpath"
 sed -i -r 's/(org.eclipse.jdt.launching.JRE_CONTAINER)[^"]+/\1/' "${eclipse_classpath}"
 # unit test 9
 if grep -q 'StandardVMType' "${eclipse_classpath}"; then
-  echo "Fix for eclipse .classpath file not applied correctly: exiting..."
+  slog "Fix for eclipse .classpath file not applied correctly: exiting..."
   exit 1
 fi
