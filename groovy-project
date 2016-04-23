@@ -1,6 +1,7 @@
 #!/bin/bash
 # @author: Giuseppe Ricupero
 # @e-mail: giuseppe.ricupero@polito.it
+# @TODO: optionally integrate with git
 set -e # exit if any command has a non-zero exit status (we avoid tests)
 set -u # treat unset variables as an error
 # set -x # print each command and resolve variables too before execute it (debug )
