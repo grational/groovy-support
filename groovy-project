@@ -1,7 +1,17 @@
 #!/bin/bash
 # @author: Giuseppe Ricupero
 # @e-mail: giuseppe.ricupero@polito.it
-# @TODO: optionally integrate with git
+# @TODO
+# - optionally integrate with git
+# - file 'build.gradle'
+#   |- add a comment explaining why eclipse plugin is added to build.gradle
+#   |- add codenarc plugin to build.gradle
+#   |- add application plugin to build.gradle
+#   |- add slf4j compile dep to build.gradle
+#   |- add mainClassName = 'it.seatpg.rnd.Launcher' to build.gradle
+# - plugin 'codenarc'
+#   |- mkdir config/codenarc/codenarc[Main|Test].groovy
+#   |- copy the configuration files of codenarc inside the above dir
 set -e # exit if any command has a non-zero exit status (we avoid tests)
 set -u # treat unset variables as an error
 # set -x # print each command and resolve variables too before execute it (debug )
