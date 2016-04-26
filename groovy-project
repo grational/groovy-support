@@ -9,6 +9,7 @@
 #   |- add application plugin to build.gradle
 #   |- add slf4j compile dep to build.gradle
 #   |- add mainClassName = 'it.seatpg.rnd.Launcher' to build.gradle
+#   |- remove unnecessary junit dependency
 # - plugin 'codenarc'
 #   |- mkdir config/codenarc/codenarc[Main|Test].groovy
 #   |- copy the configuration files of codenarc inside the above dir
