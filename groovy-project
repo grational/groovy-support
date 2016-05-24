@@ -8,8 +8,9 @@
 #   |- add codenarc plugin to build.gradle
 #   |- add application plugin to build.gradle
 #   |- add slf4j compile dep to build.gradle
-#   |- add mainClassName = 'it.seatpg.rnd.Launcher' to build.gradle
+#   |- add mainClassName = 'it.grecovery.rnd.Launcher' to build.gradle
 #   |- remove unnecessary junit dependency
+#   |- add cobertura plugin section
 # - plugin 'codenarc'
 #   |- mkdir config/codenarc/codenarc[Main|Test].groovy
 #   |- copy the configuration files of codenarc inside the above dir
@@ -41,12 +42,12 @@ repeat() {
 }
 slog() {
 	if [[ 'x-hg' = "x${1}" ]]; then
-		shift; TEXT="[${SCRIPT_NAME}] ${*}"
+		shift; TEXT="[${script_name}] ${*}"
 		repeat '=' "${#TEXT}"
 		echo "${TEXT}"
 		repeat '=' "${#TEXT}"
 	else
-		echo "[${SCRIPT_NAME}] ${@}"
+		echo "[${script_name}] ${@}"
 	fi
 }
 
@@ -89,7 +90,7 @@ done
 
 workspace="${HOME}/Applicazioni/workspace"
 project_dir="${workspace}/${project_name}"
-rnd_base_package='it/seatpg/rnd'
+rnd_base_package='it/grecovery/rnd'
 main_dir='src/main/groovy'
 test_dir='src/test/groovy'
 init_class='Library.groovy'
@@ -98,8 +99,17 @@ default_class="${main_dir}/${init_class}"
 default_test="${test_dir}/${init_test}"
 
 ## 1. Create project dir, if something goes wrong the script stop the execution
-mkdir "${project_dir}"
-# No need to test because of set -e
+if [[ -d "${project_dir}" ]]; then
+  slog "Project directory already exists. Do you want to continue?"
+	slog "Content of ${project_dir}"
+	ls "${project_dir}"
+	select answer in yes no; do
+		case $answer in
+			"yes") mkdir -p "${project_dir}"; break;;
+			"no") slog " Exiting..."; exit 1 ;;
+		esac
+	done
+fi
 
 ## 2. Enter project dir
 cd "${project_dir}"
