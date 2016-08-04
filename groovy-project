@@ -1,46 +1,49 @@
 #!/bin/bash
+# vim: fdm=marker
 # @author: Giuseppe Ricupero
 # @e-mail: giuseppe.ricupero@polito.it
-# @TODO
-# - optionally integrate with git
-# - file 'build.gradle'
-#   |- add a comment explaining why eclipse plugin is added to build.gradle
-#   |- add codenarc plugin to build.gradle
-#   |- add application plugin to build.gradle
-#   |- add slf4j compile dep to build.gradle
-#   |- add mainClassName = 'it.grecovery.rnd.Launcher' to build.gradle
-#   |- remove unnecessary junit dependency
-#   |- add cobertura plugin section
-# - plugin 'codenarc'
-#   |- mkdir config/codenarc/codenarc[Main|Test].groovy
-#   |- copy the configuration files of codenarc inside the above dir
+# TODO
+# - check for vpn connection before iol project
+# - check for connection in any steps that require it
+# - check for the required git configuration (print a message otherwise)
 set -e # exit if any command has a non-zero exit status (we avoid tests)
 set -u # treat unset variables as an error
-# set -x # print each command and resolve variables too before execute it (debug )
+# set -x # print each command and resolve variables too before execute it (debug)
 set -o pipefail # if any command in a pipeline fails, that return code will be used as the return code of the whole pipeline
 
 script_name="${0##*/}"
+nl=$'\n'
 
-# dependencies test
-# ------------------
-script_deps=(gradle sed grep)
+# dependencies test {{{
+# -----------------
+script_deps=(gradle curl sed grep git)
 for com in "${script_deps[@]}"; do
 	if ! command -v "$com" >/dev/null 2>&1; then
     echo >&2 "'${com}' executable is required to run ${script_name}. Aborting."
     exit 1
   fi
 done
+# }}}
 
-usage() {
+# custom functions {{{
+# ----------------
+usage() { # {{{
 	echo "${script_name} usage:"
-	echo '<*> [-p | --project] <Project Name>'
+	echo '<*> <-n | --project-name> <Project Name>'
+	echo '<*> <-N | --project-nature> <hub|iol|phd>'
+	echo '<*> <-d | --project-description> <Project Description>'
+	echo '    [-p | --package-name] <Package Name>'
+	echo '    [-M | --main-class] <Main Class Name>'
+  echo '    [-a | --application]'
+  echo '    [-F | --fat-jar]'
 	echo '    [-h | --help]'
 	echo '<*>: mandatory parameter'
-}
-repeat() {
+  exit 1
+} # }}}
+repeat() { # {{{
   printf "${1}%.0s" $(seq 1 "${2}"); echo
-}
-slog() {
+} # }}}
+slog() { # {{{
 	if [[ 'x-hg' = "x${1}" ]]; then
 		shift; TEXT="[${script_name}] ${*}"
 		repeat '=' "${#TEXT}"
@@ -49,16 +52,17 @@ slog() {
 	else
 		echo "[${script_name}] ${@}"
 	fi
-}
+} # }}}
+# }}}
 
-if [[ $# -lt 2 ]]; then
-	usage
-	exit 1
+# handle command line parameters {{{
+# ------------------------------
+if [[ $# -lt 6 ]]; then
+	usage # and exit
 fi
 
-# Handle Command line parameters
-short='hp:'
-long='help,project:'
+short='n:N:d:p:M:aFh'
+long='project-name:,project-nature:,project-description:,package:,main-class:,application,fat-jar,help'
 parsed=$(getopt --options ${short} --longoptions ${long} --name "$0" -- "$@")
 if [[ $? != 0 ]]; then
   exit 1
@@ -68,16 +72,51 @@ eval set -- "${parsed}"
 
 while true; do
 	case "$1" in
+		-n|--project-name)
+      project_name="$2"
+			shift;shift
+			;;
+		-N|--project-nature)
+      project_nature="$2"
+			shift;shift
+			;;
+		-d|--project-description)
+      project_description="$2"
+			shift;shift
+			;;
+		-p|--package)
+      package_name="$2"
+			shift;shift
+			;;
+		-M|--main-class)
+      main_class="$2"
+			shift;shift
+			;;
+    -a|--application)
+      application_plugin='on'
+			shift
+			;;
+    -F|--fat-jar)
+      fatjar='on'
+			shift
+			;;
 		-h|--help)
 			usage
 			exit 5
 			;;
-		-p|--project)
-      project_name="$2"
-			shift
-			shift
-			;;
-		--)
+    --)
+      project_name=${project_name:-off}
+      project_nature=${project_nature:-off}
+      project_description=${project_description:-off}
+      package_name="${package_name:-default}"
+      [[ $package_name = default ]] && package_name="it.grecovery.$(sed -r 's/-([a-z])/\u\1/ig' <<<"${project_name}")"
+      main_class="${main_class:-Library}"
+      application_plugin=${application_plugin:-off}
+      fatjar=${fatjar:-off}
+      # Mandatory params check
+      [[ $project_name == off ]] && usage
+      [[ ! $project_nature =~ ^(hub|iol|phd)$ ]] && usage
+      [[ $project_description == off ]] && usage
 			shift
 			break
 			;;
@@ -87,96 +126,603 @@ while true; do
 			;;
 	esac
 done
+# }}}
 
+# variables initializiation {{{
+# -------------------------
 workspace="${HOME}/Applicazioni/workspace"
 project_dir="${workspace}/${project_name}"
-rnd_base_package='it/grecovery/rnd'
+package_path="${package_name//./\/}"
 main_dir='src/main/groovy'
 test_dir='src/test/groovy'
+main_rsc='src/main/resources'
 init_class='Library.groovy'
 init_test='LibraryTest.groovy'
 default_class="${main_dir}/${init_class}"
 default_test="${test_dir}/${init_test}"
+gradle_conf='build.gradle'
+# }}}
 
-## 1. Create project dir, if something goes wrong the script stop the execution
+## Main Steps
+## ==========
+
+## 1. Create project dir {{{
+## ---------------------
 if [[ -d "${project_dir}" ]]; then
-  slog "Project directory already exists. Do you want to continue?"
+  slog "Project directory already exists. Do you want to continue and destroy its content?"
 	slog "Content of ${project_dir}"
 	ls "${project_dir}"
 	select answer in yes no; do
 		case $answer in
-			"yes") mkdir -p "${project_dir}"; break;;
+			"yes") rm -rf "${project_dir}"; mkdir -p "${project_dir}"; break;;
 			"no") slog " Exiting..."; exit 1 ;;
 		esac
 	done
+else
+  mkdir -p "${project_dir}"
 fi
+# No need to test because of set -e
+# }}}
 
-## 2. Enter project dir
+## 2. Enter project dir {{{
+## --------------------
 cd "${project_dir}"
 # No need to test because of set -e
+# }}}
 
-## 3. create structure of the project with gradle using spock as test framework
+## 3. create structure of the project with gradle {{{
+## -----------------------------------------------
 gradle init --type groovy-library &>/dev/null
 # No need to test because of set -e
+# }}}
 
-## 4. create the default package for the classes and test creation
-for dir in main test; do
-  mkdir -p "src/${dir}/groovy/${rnd_base_package}/${project_name}"
+## 4. Remove ${gradle_conf}, ${default_class}, ${default_test} {{{
+## -----------------------------------------------------------
+files_to_remove=("${gradle_conf}" "${default_class}" "${default_test}")
+rm "${files_to_remove[@]}"
+# No need to test because of set -e
+# }}}
+
+## 5. create resource plus and default package in main and test {{{
+## ------------------------------------------------------------
+dirs_to_create=("${main_dir}/${package_path}" "${test_dir}/${package_path}" "${main_rsc}")
+mkdir -p "${dirs_to_create[@]}"
+# No need to test because of set -e
+# }}}
+
+## 6. Add gradle properties with Nexus repository data (only iol) {{{
+## --------------------------------------------------------------
+if [[ $project_nature == 'iol' ]]; then
+add_gradle_properties() { # {{{
+  # read this data from command line with read -p(rompt)
+  local iolNexusUsername
+  local iolNexusPassword
+  read -p "Provide nexus username: " iolNexusUsername
+  read -s -p "Provide nexus password: " iolNexusPassword
+  echo
+cat > "${project_dir}/gradle.properties" << EOF
+iolNexusUrl=http://nexus.grosio.pgol.net/nexus
+iolNexusUsername=${iolNexusUsername}
+iolNexusPassword=${iolNexusPassword}
+EOF
+} # }}}
+
+# 6 create gradle.properties file
+  add_gradle_properties
+  # unit test 8
+  if [[ ! -f "${project_dir}/gradle.properties" ]]; then
+    slog "gradle.properties not created correctly: exiting..."
+    exit 1
+  fi
+fi
+# }}}
+
+## 7. create custom ${gradle_conf}, ${default_class}, ${default_test}  {{{
+##    plus: optionally generate Launcher.groovy (if application is on)
+## -------------------------------------------------------------------
+create_build_gradle() { # {{{
+  local lbuildfile="${1}"
+  local lpackage="${2}"
+  local lversion="${3}"
+  local ldescription="${4}"
+  local lnature="${5}"
+  local lapp="${6}"
+  local lfatjar="${7}"
+
+cat > "${lbuildfile}" << EOF
+/*
+ * This build file was auto generated by '${script_name}'
+ * @author $(whoami)
+ * @date $(date +'%d-%m-%Y %H.%M')
+ */
+
+/* ----------------- *\\
+   [plugins] section
+\* ----------------- */
+// [cobertura] code coverage plugin (needs to be placed before groovy)
+plugins {
+  id 'net.saliman.cobertura' version '2.3.2'
+}
+// [groovy] support for groovy language
+apply plugin: 'groovy'
+
+// [codenarc] groovy linter plugin
+apply plugin: 'codenarc'
+
+codenarcMain {
+  configFile = rootProject.file('config/codenarc/codenarcMain.groovy')
+}
+codenarcTest {
+  configFile = rootProject.file('config/codenarc/codenarcTest.groovy')
+}
+
+// [eclipse] generate eclipse project files
+apply plugin: 'eclipse'
+$([[ $lnature = 'iol' ]] && {
+echo
+echo '// [maven] used to upload to a nexus server'
+echo "apply plugin: 'maven'"
+echo
+echo 'configurations {'
+echo '  deployerJars'
+echo '}'
+echo
+echo 'dependencies {'
+echo '  // needed to deploy on nexus via http'
+echo "  deployerJars \"org.apache.maven.wagon:wagon-http:2.+\""
+echo '}'
+echo
+echo 'uploadArchives {'
+echo '  repositories.mavenDeployer {'
+echo '    configuration = configurations.deployerJars'
+echo '    repository(url: "${iolNexusUrl}/content/repositories/releases") {'
+echo '      authentication(userName: iolNexusUsername, password: iolNexusPassword)'
+echo '    }'
+echo '    snapshotRepository(url: "${iolNexusUrl}/content/repositories/snapshots") {'
+echo '      authentication(userName: iolNexusUsername, password: iolNexusPassword)'
+echo '    }'
+echo '  }'
+echo '}'
+})
+
+$([[ $lapp == 'on' ]] && {
+  echo '// [application] execute and distribute standalone apps'
+  echo "apply plugin: 'application'"
+  echo
+  echo "mainClassName = 'Launcher'"
+  echo
+  echo "// gradle task 'run' (from application plugin) with params"
+  echo "// ~$ gradle run -Params='[\"first arg\",\"second arg\"]'"
+  echo 'run {'
+  echo '  enableAssertions = true'
+  echo "  if ( project.hasProperty('arams') ) {"
+  echo '    args Eval.me(arams)'
+  echo '  }'
+  echo '}'
+}; echo
+)
+
+/* ----------------- *\\
+   [general] section
+\* ----------------- */
+group       = '${lpackage}'
+version     = '${lversion}-SNAPSHOT' // (remove tail -SNAPSHOT for releases e.g., '1.0.0')
+description = '${ldescription}'
+
+repositories {
+  jcenter()
+$([[ $lnature = 'iol' ]] && {
+echo '  // enable only if iol vpn is up, otherwise gradle hangs'
+echo '  // maven {'
+echo '  //   url "${iolNexusUrl}/content/repositories/snapshots"'
+echo '  //   url "${iolNexusUrl}/content/repositories/releases"'
+echo '  // }'
+}; echo '}'
+)
+
+dependencies {
+  // We use the latest groovy 2.x version for building this library
+  compile 'org.codehaus.groovy:groovy-all:2.+'
+
+  // Slf4j dependencies with log4j2 backend
+  compile "org.slf4j:slf4j-api:1.7.+"
+  compile "org.apache.logging.log4j:log4j-slf4j-impl:2.6.+"
+  compile "org.apache.logging.log4j:log4j-api:2.6.+"
+  compile "org.apache.logging.log4j:log4j-core:2.6.+"
+
+  // We use the awesome Spock testing and specification framework
+  testCompile 'org.spockframework:spock-core:1.0-groovy-2.4'
+}
+
+/* --------------------- *\\
+   [tasks] configuration
+\* --------------------- */
+jar {
+  // execute check task when create the jar
+  dependsOn 'check'
+$( [[ $lfatjar = 'on' ]] && {
+  echo '  // [fatjar] include deps into the jar artifact'
+  echo '  from configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }'
+}; echo '}'
+)
+
+check {
+  // clean before check
+  dependsOn 'clean'
+  // create the code coverage report
+  dependsOn 'cobertura'
+  // set the correct order for the dep tasks
+  tasks.findByName('cobertura').mustRunAfter 'clean'
+}
+
+/* ------------------ *\\
+   [tasks] definition
+\* ------------------ */
+// [listJars] print to stdout the jars used by the project
+task listJars << {
+  configurations.compile.each { File file -> println file.name }
+}
+EOF
+} # }}}
+create_library() { # {{{
+  local lmainpath="${1}"
+  local lclass="${2}"
+  local lpackage="${3}"
+
+  cat > "${lmainpath}/${lclass}.groovy" << EOF
+package ${lpackage}
+
+import groovy.util.logging.Slf4j
+
+/**
+ * This Groovy source file was auto generated by '${script_name}'
+ * @author $(whoami)
+ * @date $(date +'%d-%m-%Y %H.%M')
+ */
+class ${lclass} {
+  /**
+   * This method returns always true.
+   */
+  Boolean some${lclass}Method() {
+    true
+  }
+}
+EOF
+} # }}}
+create_library_specification() { # {{{
+  local ltestpath="${1}"
+  local lclass="${2}"
+  local lpackage="${3}"
+
+cat > "${ltestpath}/${lclass}Spec.groovy" << EOF
+package ${lpackage}
+
+import spock.lang.Specification
+
+/**
+ * This Spock specification was auto generated by '${script_name}'
+ * @author $(whoami)
+ * @date $(date +'%d-%m-%Y %H.%M')
+ */
+class ${lclass}Spec extends Specification {
+  def "some${lclass}Method returns true"() {
+    setup:
+      ${lclass} lib = new ${lclass}()
+    when:
+      Boolean result = lib.some${lclass}Method()
+    then:
+      result == true
+  }
+}
+EOF
+} # }}}
+add_launcher_class() { # {{{
+  local lmain_dir="${1}"
+  local lmain_class="${2}"
+  local lpackage_name="${3}"
+
+  launcher_class="${lmain_dir}/Launcher.groovy"
+cat > "${launcher_class}" << EOF
+import groovy.util.logging.Slf4j
+import ${lpackage_name}.${lmain_class}
+
+/**
+ * This class is used as entry point for the entire application.
+ * <p>
+ * Initially i've used an external script to accomplish this task but an internal
+ * class has several advantages:<ul>
+ * <li>never leave the main session of coding
+ * <li>automatic code check as the regular class
+ * <li>lint check (codenarc)
+ * <li>execute with gradle through the 'application' plugin</ul>
+ * @author $(whoami)
+ * @date $(date +'%d-%m-%y %H.%M')
+ */
+@Slf4j
+class Launcher {
+
+  /**
+   * Entry point of the application
+   */
+  static void main(String... args) {
+    // log each parameter to logs/app.log
+    args.each { log.info it }
+    assert new ${lmain_class}().some${lmain_class}Method() == true
+  }
+
+}
+EOF
+  # 17.b unit test
+  if [[ ! -f "${launcher_class}" ]]; then
+    slog "Launcher.groovy not created correctly: exiting..."
+    exit 1
+  fi
+} # }}}
+# 7.1 create custom ${gradle_conf} # {{{
+default_version=1.0.0
+read -p "Insert project version (${default_version}): " project_version
+project_version=${project_version:-$default_version}
+
+create_build_gradle \
+  "${gradle_conf}" \
+  "${package_name}" \
+  "${project_version}" \
+  "${project_description}" \
+  "${project_nature}" \
+  "${application_plugin}" \
+  "${fatjar}"
+# unit test 7.1
+if ! gradle tasks &>/dev/null; then
+  slog "File '${gradle_conf}' not created correctly: exiting..."
+  exit 1
+fi
+# }}}
+
+# 7.2 create library / library_specification
+mainpath="${main_dir}/${package_path}"
+testpath="${test_dir}/${package_path}"
+
+create_library "${mainpath}" "${main_class}" "${package_name}"
+create_library_specification "${testpath}" "${main_class}" "${package_name}"
+# unit test 7.2
+if ! gradle test &>/dev/null; then
+  slog "Files '$main_class', '${main_class}Spec' not created correctly: exiting..."
+  exit 1
+fi
+
+# 7.3 optionally generate Launcher class
+if [[ $application_plugin == 'on' ]]; then
+  add_launcher_class "${main_dir}" "${main_class}" "${package_name}"
+fi
+# No need to test because of set -e
+# }}}
+
+## 8. Uncompress PAYLOAD (codenarc conf) into the project {{{
+## -----------------------------------------------------------
+match=$(grep --text --line-number '^PAYLOAD:$' $0 | cut -d ':' -f 1)
+payload_start=$((match + 1))
+tail -n +$payload_start $0 | uudecode | tar xzp -C "${project_dir}"
+# unit test 14.a
+conf_files=(codenarcMain codenarcTest)
+for f in "${conf_files[@]}"; do
+  if [[ ! -f "${project_dir}/config/codenarc/${f}.groovy" ]]; then
+    slog "${f}.groovy not created correctly: exiting..."
+    exit 1
+  fi
 done
+# }}}
 
-## 5. add rnd_base_package statement to Library.groovy and LibraryTest.groovy
-package_statement="package ${rnd_base_package//\//.}.${project_name}"
-sed -i "1i${package_statement}" "${default_class}" "${default_test}"
-# unit test 5
-if ! grep -q "${package_statement}" "${default_class}"; then
-  slog "Adding rnd_package statement to default class failed: exiting..."
+## 9. add log4j configuration file {{{
+## --------------------------------
+add_log4j2_conf() {
+  local lconf="${1}"
+  cat > "${lconf}" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="INFO" monitorInterval="30">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n" />
+    </Console>
+    <RollingFile
+      name="RollingFile"
+      fileName="logs/app.log"
+      filePattern="logs/$${date:yyyy-MM}/app-%d{MM-dd-yyyy}-%i.log.gz">
+      <PatternLayout pattern="%d{yyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+      <Policies>
+        <SizeBasedTriggeringPolicy size="20 MB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="20"/>
+    </RollingFile>
+  </Appenders>
+  <Loggers>
+    <Root level="info">
+      <AppenderRef ref="RollingFile"/>
+    </Root>
+  </Loggers>
+</Configuration>
+EOF
+}
+# unit test 9
+log4j_conf="${main_rsc}/log4j2.xml"
+add_log4j2_conf "${log4j_conf}"
+if [[ ! -f "${log4j_conf}" ]]; then
+  slog "log4j2 conf file not '${log4j_conf}' not created correctly: exiting..."
   exit 1
 fi
-if ! grep -q "${package_statement}" "${default_test}"; then
-  slog "Adding rnd_package statement to default test failed: exiting..."
-  exit 1
-fi
+# }}}
 
-## 6. move default class and test to the rnd_base_package
-mv "${default_class}" "${main_dir}/${rnd_base_package}/${project_name}"
-mv "${default_test}" "${test_dir}/${rnd_base_package}/${project_name}"
-# unit test 6
-if [[ ! -f "${main_dir}/${rnd_base_package}/${project_name}/${init_class}" ]]
-then
-  slog "${init_class} not moved to rnd_base_package correctly: exiting..."
-  exit 1
-fi
-if [[ ! -f "${test_dir}/${rnd_base_package}/${project_name}/${init_test}" ]]
-then
-  slog "${init_test} not moved to rnd_base_package correctly: exiting..."
-  exit 1
-fi
-
-## 7. add eclipse plugin to build.gradle
-eclipse_plugin_statement="apply plugin: 'eclipse'"
-gradle_conf='build.gradle'
-sed -i "12i${eclipse_plugin_statement}" "${gradle_conf}"
-# Unit Test 7
-if ! gradle tasks | grep -q 'eclipse'; then
-  slog "Apply eclipse plugin to gradle conf file failed: exiting..."
-  exit 1
-fi
-
-## 8. generate eclipse project files: .classpath, .project, .settings
+## 10. generate eclipse project files: .classpath, .project, .settings {{{
+## -------------------------------------------------------------------
 gradle eclipse &>/dev/null
-# unit test 8
+# unit test 10
 for ep_file in classpath project settings; do
   if [[ ! -e ".${ep_file}" ]]; then
     slog "Generating eclipse project files failed: exiting..."
     exit 1
   fi
 done
+# }}}
 
-## 9. fix a bug with classpath file generated by gradle init
+## 11. fix a bug with classpath file generated by gradle eclipse plugin {{{
+## --------------------------------------------------------------------
 eclipse_classpath="${project_dir}/.classpath"
 sed -i -r 's/(org.eclipse.jdt.launching.JRE_CONTAINER)[^"]+/\1/' "${eclipse_classpath}"
-# unit test 9
+# unit test 11
 if grep -q 'StandardVMType' "${eclipse_classpath}"; then
   slog "Fix for eclipse .classpath file not applied correctly: exiting..."
   exit 1
 fi
+# }}}
+
+## 12. Create remote git repo for the project {{{
+## ------------------------------------------
+add_gitignore() { #{{{
+
+  local gitignore="${project_dir}/.gitignore"
+
+cat > "${gitignore}" << EOF
+# gradle specific
+.gradle
+build/
+gradle.properties
+
+# log directory
+logs/
+
+# eclim daemon conf file
+workspace.xml
+
+# eclim/eclipse specific file
+.classpath
+.project
+.settings/
+bin/
+
+# Vim
+*.sw[op]
+
+# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
+!gradle-wrapper.jar
+EOF
+
+  # 2.a unit test
+  if [[ ! -f "${gitignore}" ]]; then
+    slog "${gitignore} not created correctly: exiting..."
+    exit 1
+  fi
+} # }}}
+add_gitreadme() { # {{{
+
+  local gitreadme="${project_dir}/README.md"
+
+cat > "${gitreadme}" << EOF
+# ${project_name}
+
+${project_description}
+EOF
+
+  # 2.a unit test
+  if [[ ! -f "${gitreadme}" ]]; then
+    slog "${gitreadme} not created correctly: exiting..."
+    exit 1
+  fi
+} # }}}
+create_git_repo() { # {{{
+  local username="$(git config ${project_nature}.user)"
+  local token="$(git config ${project_nature}.token)"
+  local api="$(git config ${project_nature}.api)"
+  curl="curl -s -H 'Content-Type:application/json'"
+  case ${project_nature} in
+    hub)
+      curl="${curl} -H 'Authorization: token ${token}' ${api} \
+        -d '{\"name\":\"${project_name}\", \
+        \"description\": \"${project_description}\"}'"
+      ;;
+    iol)
+      curl="${curl} -H 'PRIVATE-TOKEN: ${token}' ${api} \
+        -d '{\"name\":\"${project_name}\", \
+        \"description\": \"${project_description}\"}'"
+      ;;
+    phd)
+      local group_id="$(git config phd.namespace-id)"
+      curl="${curl} -H 'PRIVATE-TOKEN: ${token}' ${api} \
+        -d '{\"name\":\"${project_name}\", \
+        \"description\": \"${project_description}\", \
+        \"namespace_id\": ${group_id}}'"
+      ;;
+  esac
+  eval "${curl} &>/dev/null"
+  # Docs gitlab.com
+  # http://docs.gitlab.com/ce/api/projects.html
+
+  # Select id of gitlab.com group
+  # curl -s -H "PRIVATE-TOKEN: $(git config gitlab.com.token)" \
+  #   "https://gitlab.com/api/v3/namespaces" | jq '.[] | select(.path == "dbdmg") | .id'
+  # 231236
+  # curl -H "PRIVATE-TOKEN: $(git config gitlab.com.token)" -X POST \
+  # 'https://gitlab.com/api/v3/projects' --data-urlencode "name=${project_name}" --data-urlencode "description=${project_description}"
+} # }}}
+git_local_initialize() { # {{{
+  # Initialize the local repo
+  git init -q
+  # Adds the files in the local repository and stages them for commit.
+  # To unstage a file, use 'git reset HEAD YOUR-FILE'.
+  git add .
+  # Commits the tracked changes and prepares them to be pushed to a
+  # remote repository. To remove this commit and modify the file,
+  # use 'git reset --soft HEAD~1' and commit and add the file again.
+  git commit -m "First commit" -q
+} # }}}
+git_add_remote() { # {{{
+  local ssh_user="$(git config ${project_nature}.ssh-user)"
+  local host="$(git config ${project_nature}.host)"
+  local user="$(git config ${project_nature}.user)"
+  # Sets the new remote
+  # HUB: git@github.com:grecovery/project_name.git
+  # IOL: gitlab@gitlab.pgol.net:user/project_name.git
+  # PHD: git@gitlab.com:dbdmg/project_name.git
+  # Verifies the new remote URL: $(git remote -v)
+  git remote add origin "${ssh_user}@${host}:${user}/${project_name}.git"
+} # }}}
+
+# tested for github
+if [[ ${project_nature} =~ (hub|iol|phd) ]]; then
+  # 1. add .gitignore (unit test: OK)
+  add_gitignore
+  # 2. add README.md  (unit test: OK)
+  add_gitreadme
+  # 3. create remote git repo
+  create_git_repo
+  # 4. initialize local git repo
+  git_local_initialize
+  # 5. link local to remote
+  git_add_remote
+  # 6. push local files to remote
+  git push -u origin master &>/dev/null
+fi
+# }}}
+
+exit 0
+
+# Codenarc configuration files (used by step 15)
+# ----------------------------------------------
+PAYLOAD:
+begin 664 -
+M'XL(`.X5H%<``^V5;6O;,!#'\SJ?0O2-6S8:VXD=&/1%EW8P6,M8E[W9`ZCR
+MQ561)2/)P=GH=]\E=M+'*-U#PT;U`\>.[NR3[G\Z,24G/.]UGI(0&2;)_!X-
+MD_#F?4DGBH?A<-!/XQ3]HBA,^QV2/.FL6BICJ2:DDYO*N/PVV?]36*,_4QE(
+MJMF3%,(C]1^D49J$_;G^<=I/O?[;X*[^RX<3RN5^KI6:SOXXQES@-!VLTS]*
+M^RO]^V$R1/W3P7#0(>%?6-]&GKG^NA)@P)(?74(R,$SSTG(E23`O`))K8&H*
+M>D:@+D'S`J2E(NBB<_OB;M`^F-XY-9SMUX4(]AZV:\K`.!RP%EFE-4@V<WM-
+M<1HX28<3+H7G3@?MB@$U@T4>7-.=*%U0:[G,&Z=%#@DY*W&9AUI5,CNAY;&T
+M>C92`E/:F`EA%Q0S84$?3O!G8?L`.=3D@/2^7/067E?=YKH?-0>)0KCRW.Q:
+M;@J'#R]*I:UK=9?9N2O(926Y==B%RO-59A[TD+1P.QC`:N#6I9/AW\%AKJ0$
+M+#E#G6)7LC*0W=(P&"_&WFL^I1;><!!9L-*/$.R0YP(R%,SJ"E;#6'%*-]ZG
+MM`"#]D!08\=EAE_)7I+Y;:2A^6-01BH^@3989^.W1\$-X:^ZV]K_Z_K_1S!V
+M2_T_CJ+^G?,_3>+8]_]ML+;_SPO@'^[ZRXUZJHY@<KTWL7&+*H-5/]WY_&WG
+MZXN=34WU\<=%&^FH*@5GN)'/K,8N]HYC)Z>"[+:=X1694&%@;VW`WSI@GL]Y
+ML%3W!.R%6C33@-Q.[=K,_M*IT<89S9A0F&K.1JHH!=3X_JJD"EHWT[AA.R!Q
+MLJ&D[IT][0?'U^.OE1)`Y7%=:AS`8GAT^3SK(\OC\7@\'H_'X_%X/!Z/Q^/Q
+/>#P>SP9^`J5LAH@`*```
+`
+end

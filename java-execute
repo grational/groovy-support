@@ -1,0 +1,44 @@
+#!/bin/bash
+# @author: Giuseppe Ricupero
+# @e-mail: giuseppe.ricupero@polito.it
+# 1. create a list of jar placed in the current directory separated by colon ':'
+# 2. grep the class name and create a soft link with the proper name of class
+# 3. restore the previous state of the current directory
+set -e # exit if any command has a non-zero exit status (we avoid tests)
+set -u # treat unset variables as an error
+# set -x # print each command and resolve variables too before execute it (debug)
+set -o pipefail # if any command in a pipeline fails, that return code will be used as the return code of the whole pipeline
+
+script_name="${0##*/}"
+
+usage() {
+  echo "${script_name} <source.java>"
+  echo "This script execute a single java class Main"
+  echo "usually I use this with a list of asserts to "
+  echo "demonstrate some the functionalities of a library."
+  echo "Place all the needed jars in the current directory "
+  echo "together with the java file."
+  exit 1
+}
+
+(( ${#@} < 1 )) && usage
+
+main_file="${1}"
+classpath=$(find . -maxdepth 1 -type d -print0 -o -type f -iname '*.jar' -a -printf ':%f')
+real_class_name="$(grep -oP 'public\h+class\h+\K\w+' "${main_file}")"
+required_filename="${real_class_name}.java"
+
+# Check if a symlink with the name of the class is needed
+if [[ ! -e ${required_filename} ]]; then
+  ln -s "${main_file}" "${required_filename}"
+fi
+
+# Actual run
+params='-ea'
+echo "javac -cp ${classpath} ${required_filename} && java ${params} -cp ${classpath} ${real_class_name}"
+javac -cp "${classpath}" "${required_filename}" && clean_class=true && set +e && java ${params} -cp "${classpath}" "${real_class_name}" && set -e
+
+# Clean
+test 
+[[ -L ${required_filename}     ]] && rm "${required_filename}"
+[[ -e ${real_class_name}.class ]] && rm "${real_class_name}.class"
