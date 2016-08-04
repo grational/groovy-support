@@ -29,8 +29,8 @@ done
 # ----------------
 usage() { # {{{
 	echo "${script_name} usage:"
+	echo '<*> <-P | --profile> <hub|iol|phd>'
 	echo '<*> <-n | --project-name> <Project Name>'
-	echo '<*> <-N | --project-nature> <hub|iol|phd>'
 	echo '<*> <-d | --project-description> <Project Description>'
 	echo '    [-p | --package-name] <Package Name>'
 	echo '    [-M | --main-class] <Main Class Name>'
@@ -61,8 +61,8 @@ if [[ $# -lt 6 ]]; then
 	usage # and exit
 fi
 
-short='n:N:d:p:M:aFh'
-long='project-name:,project-nature:,project-description:,package:,main-class:,application,fat-jar,help'
+short='P:n:d:p:M:aFh'
+long='profile:,project-name:,project-description:,package:,main-class:,application,fat-jar,help'
 parsed=$(getopt --options ${short} --longoptions ${long} --name "$0" -- "$@")
 if [[ $? != 0 ]]; then
   exit 1
@@ -72,12 +72,12 @@ eval set -- "${parsed}"
 
 while true; do
 	case "$1" in
-		-n|--project-name)
-      project_name="$2"
+		-P|--profile)
+      profile="$2"
 			shift;shift
 			;;
-		-N|--project-nature)
-      project_nature="$2"
+		-n|--project-name)
+      project_name="$2"
 			shift;shift
 			;;
 		-d|--project-description)
@@ -106,16 +106,16 @@ while true; do
 			;;
     --)
       project_name=${project_name:-off}
-      project_nature=${project_nature:-off}
+      profile=${profile:-off}
       project_description=${project_description:-off}
       package_name="${package_name:-default}"
-      [[ $package_name = default ]] && package_name="it.grecovery.$(sed -r 's/-([a-z])/\u\1/ig' <<<"${project_name}")"
+      [[ $package_name = default ]] && package_name="$(locale | awk -F'=' '/LANGUAGE/ {print $2}').$(whoami).$(sed -r 's/-([a-z])/\u\1/ig' <<<"${project_name}")"
       main_class="${main_class:-Library}"
       application_plugin=${application_plugin:-off}
       fatjar=${fatjar:-off}
       # Mandatory params check
       [[ $project_name == off ]] && usage
-      [[ ! $project_nature =~ ^(hub|iol|phd)$ ]] && usage
+      [[ ! $profile =~ ^(hub|iol|phd)$ ]] && usage
       [[ $project_description == off ]] && usage
 			shift
 			break
@@ -192,7 +192,7 @@ mkdir -p "${dirs_to_create[@]}"
 
 ## 6. Add gradle properties with Nexus repository data (only iol) {{{
 ## --------------------------------------------------------------
-if [[ $project_nature == 'iol' ]]; then
+if [[ $profile == 'iol' ]]; then
 add_gradle_properties() { # {{{
   # read this data from command line with read -p(rompt)
   local iolNexusUsername
@@ -225,7 +225,7 @@ create_build_gradle() { # {{{
   local lpackage="${2}"
   local lversion="${3}"
   local ldescription="${4}"
-  local lnature="${5}"
+  local lprofile="${5}"
   local lapp="${6}"
   local lfatjar="${7}"
 
@@ -258,7 +258,7 @@ codenarcTest {
 
 // [eclipse] generate eclipse project files
 apply plugin: 'eclipse'
-$([[ $lnature = 'iol' ]] && {
+$([[ $lprofile = 'iol' ]] && {
 echo
 echo '// [maven] used to upload to a nexus server'
 echo "apply plugin: 'maven'"
@@ -311,7 +311,7 @@ description = '${ldescription}'
 
 repositories {
   jcenter()
-$([[ $lnature = 'iol' ]] && {
+$([[ $lprofile = 'iol' ]] && {
 echo '  // enable only if iol vpn is up, otherwise gradle hangs'
 echo '  // maven {'
 echo '  //   url "${iolNexusUrl}/content/repositories/snapshots"'
@@ -379,6 +379,7 @@ import groovy.util.logging.Slf4j
  * @author $(whoami)
  * @date $(date +'%d-%m-%Y %H.%M')
  */
+@Slf4j
 class ${lclass} {
   /**
    * This method returns always true.
@@ -468,7 +469,7 @@ create_build_gradle \
   "${package_name}" \
   "${project_version}" \
   "${project_description}" \
-  "${project_nature}" \
+  "${profile}" \
   "${application_plugin}" \
   "${fatjar}"
 # unit test 7.1
@@ -628,11 +629,11 @@ EOF
   fi
 } # }}}
 create_git_repo() { # {{{
-  local username="$(git config ${project_nature}.user)"
-  local token="$(git config ${project_nature}.token)"
-  local api="$(git config ${project_nature}.api)"
+  local username="$(git config ${profile}.user)"
+  local token="$(git config ${profile}.token)"
+  local api="$(git config ${profile}.api)"
   curl="curl -s -H 'Content-Type:application/json'"
-  case ${project_nature} in
+  case ${profile} in
     hub)
       curl="${curl} -H 'Authorization: token ${token}' ${api} \
         -d '{\"name\":\"${project_name}\", \
@@ -674,9 +675,9 @@ git_local_initialize() { # {{{
   git commit -m "First commit" -q
 } # }}}
 git_add_remote() { # {{{
-  local ssh_user="$(git config ${project_nature}.ssh-user)"
-  local host="$(git config ${project_nature}.host)"
-  local user="$(git config ${project_nature}.user)"
+  local ssh_user="$(git config ${profile}.ssh-user)"
+  local host="$(git config ${profile}.host)"
+  local user="$(git config ${profile}.user)"
   # Sets the new remote
   # HUB: git@github.com:grecovery/project_name.git
   # IOL: gitlab@gitlab.pgol.net:user/project_name.git
@@ -686,7 +687,7 @@ git_add_remote() { # {{{
 } # }}}
 
 # tested for github
-if [[ ${project_nature} =~ (hub|iol|phd) ]]; then
+if [[ ${profile} =~ (hub|iol|phd) ]]; then
   # 1. add .gitignore (unit test: OK)
   add_gitignore
   # 2. add README.md  (unit test: OK)
@@ -704,7 +705,7 @@ fi
 
 exit 0
 
-# Codenarc configuration files (used by step 15)
+# Codenarc configuration files (used by step 8)
 # ----------------------------------------------
 PAYLOAD:
 begin 664 -
